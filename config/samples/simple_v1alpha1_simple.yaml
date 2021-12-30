@@ -1,0 +1,6 @@
+apiVersion: simple.eximbills.com/v1alpha1
+kind: Simple
+metadata:
+  name: simple-sample
+spec:
+  # TODO(user): Add fields here
