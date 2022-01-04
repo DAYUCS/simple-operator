@@ -3,4 +3,4 @@ kind: Simple
 metadata:
   name: simple-sample
 spec:
-  # TODO(user): Add fields here
+  size: 1
