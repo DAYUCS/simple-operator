@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -45,6 +46,8 @@ type SimpleReconciler struct {
 //+kubebuilder:rbac:groups=simple.eximbills.com,resources=simples/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=services/status,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -93,6 +96,7 @@ func (r *SimpleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Ensure deployment replicas is the same as the Simple Service size
 	size := simple.Spec.Size
 	if *found.Spec.Replicas != size {
+		logger.Info("Updating replicas", "Spec.Replias", size)
 		found.Spec.Replicas = &size
 		err = r.Update(ctx, found)
 		if err != nil {
@@ -125,6 +129,22 @@ func (r *SimpleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			logger.Error(err, "Failed to update Simple Service status")
 			return ctrl.Result{}, err
 		}
+	}
+
+	// Ensure service is running
+	service := r.serviceForSimple(simple)
+	err = r.Get(ctx, types.NamespacedName{Name: service.Name, Namespace: simple.Namespace}, service)
+	if err != nil && errors.IsNotFound(err) {
+		// Create the service
+		logger.Info("Creating the service", "Deployment.Namespace", found.Namespace, "Service.Name", service.Name)
+		err = r.Create(ctx, service)
+		if err != nil {
+			logger.Error(err, "Failed to create the Service")
+			return ctrl.Result{}, err
+		}
+	} else if err != nil {
+		logger.Error(err, "Failed to get Service")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -173,10 +193,34 @@ func (r *SimpleReconciler) deploymentForSimple(m *simplev1alpha1.Simple) *appsv1
 			},
 		},
 	}
-	// Set Memcached instance as the owner and controller
+	// Set Simple instance as the owner and controller
 	ctrl.SetControllerReference(m, dep, r.Scheme)
 	return dep
 
+}
+
+func (r *SimpleReconciler) serviceForSimple(m *simplev1alpha1.Simple) *corev1.Service {
+	labels := labelsForSimple(m.Name)
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple-sample-service",
+			Namespace: m.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: labels,
+			Ports: []corev1.ServicePort{{
+				Protocol:   corev1.ProtocolTCP,
+				Port:       8080,
+				TargetPort: intstr.FromInt(8080),
+				NodePort:   30002,
+			}},
+			Type: corev1.ServiceTypeNodePort,
+		},
+	}
+
+	ctrl.SetControllerReference(m, service, r.Scheme)
+	return service
 }
 
 func labelsForSimple(name string) map[string]string {
